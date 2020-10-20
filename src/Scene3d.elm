@@ -6,7 +6,7 @@ module Scene3d exposing
     , mesh, meshWithShadow
     , group, nothing
     , rotateAround, translateBy, translateIn, scaleAbout, mirrorAcross
-    , Background, transparentBackground, backgroundColor
+    , Background, transparentBackground, backgroundColor, backgroundSkybox
     , Antialiasing
     , noAntialiasing, multisampling, supersampling
     , Lights
@@ -114,7 +114,7 @@ entity:
 
 # Background
 
-@docs Background, transparentBackground, backgroundColor
+@docs Background, transparentBackground, backgroundColor, backgroundSkybox
 
 
 # Antialiasing
@@ -197,6 +197,7 @@ import Html exposing (Html)
 import Html.Attributes
 import Html.Keyed
 import Illuminance exposing (Illuminance)
+import Json.Encode as Encode
 import Length exposing (Length, Meters)
 import LineSegment3d exposing (LineSegment3d)
 import Luminance exposing (Luminance)
@@ -213,6 +214,7 @@ import Scene3d.Entity as Entity
 import Scene3d.Light as Light exposing (Chromaticity, Light)
 import Scene3d.Material as Material exposing (Material)
 import Scene3d.Mesh as Mesh exposing (Mesh)
+import Scene3d.Skybox as Skybox
 import Scene3d.Transformation as Transformation exposing (Transformation)
 import Scene3d.Types as Types exposing (Bounds, DrawFunction, LightMatrices, LinearRgb(..), Material(..), Node(..))
 import Sphere3d exposing (Sphere3d)
@@ -923,6 +925,7 @@ current environmental lighting.
 -}
 type Background coordinates
     = BackgroundColor Color
+    | BackgroundSkybox
 
 
 {-| A fully transparent background.
@@ -937,6 +940,23 @@ transparentBackground =
 backgroundColor : Color -> Background coordinates
 backgroundColor color =
     BackgroundColor color
+
+
+toBackgroundColorString : Background coordinates -> Maybe String
+toBackgroundColorString bkg =
+    case bkg of
+        BackgroundColor color ->
+            Just (Color.toCssString color)
+
+        _ ->
+            Nothing
+
+
+{-| A skybox!
+-}
+backgroundSkybox : Background coordinates
+backgroundSkybox =
+    BackgroundSkybox
 
 
 
@@ -1684,12 +1704,6 @@ composite arguments scenes =
         heightInPixels =
             Pixels.toInt height
 
-        (BackgroundColor givenBackgroundColor) =
-            arguments.background
-
-        backgroundColorString =
-            Color.toCssString givenBackgroundColor
-
         commonWebGLOptions =
             [ WebGL.depth 1
             , WebGL.stencil 0
@@ -1744,11 +1758,25 @@ composite arguments scenes =
                 , widthCss
                 , heightCss
                 , Html.Attributes.style "display" "block"
-                , Html.Attributes.style "background-color" backgroundColorString
+                , arguments.background
+                    |> toBackgroundColorString
+                    |> Maybe.map (Html.Attributes.style "background-color")
+                    |> Maybe.withDefault attrNone
                 ]
-                webGLEntities
+                (case arguments.background of
+                    BackgroundSkybox ->
+                        Skybox.quad :: webGLEntities
+
+                    _ ->
+                        webGLEntities
+                )
           )
         ]
+
+
+attrNone : Html.Attribute msg
+attrNone =
+    Html.Attributes.property "" Encode.null
 
 
 

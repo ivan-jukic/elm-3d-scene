@@ -4,7 +4,6 @@ module OrbitingCamera exposing (main)
 mouse events and moving the camera accordingly.
 -}
 
-import Angle exposing (Angle)
 import Browser
 import Browser.Events
 import Camera3d
