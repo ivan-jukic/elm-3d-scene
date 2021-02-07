@@ -17,7 +17,7 @@ module Scene3d exposing
     , noToneMapping, reinhardToneMapping, reinhardPerChannelToneMapping, hableFilmicToneMapping
     , placeIn, relativeTo
     , triangleShadow, quadShadow, blockShadow, sphereShadow, cylinderShadow, coneShadow, meshShadow
-    , composite, toWebGLEntities
+    , toWebGLEntities
     )
 
 {-| Top-level functionality for rendering a 3D scene.
@@ -214,7 +214,7 @@ import Scene3d.Entity as Entity
 import Scene3d.Light as Light exposing (Chromaticity, Light)
 import Scene3d.Material as Material exposing (Material)
 import Scene3d.Mesh as Mesh exposing (Mesh)
-import Scene3d.Skybox as Skybox
+import Scene3d.Skybox as Skybox exposing (SkyboxTexture)
 import Scene3d.Transformation as Transformation exposing (Transformation)
 import Scene3d.Types as Types exposing (Bounds, DrawFunction, LightMatrices, LinearRgb(..), Material(..), Node(..))
 import Sphere3d exposing (Sphere3d)
@@ -925,7 +925,7 @@ current environmental lighting.
 -}
 type Background coordinates
     = BackgroundColor Color
-    | BackgroundSkybox
+    | BackgroundSkybox SkyboxTexture
 
 
 {-| A fully transparent background.
@@ -952,11 +952,11 @@ toBackgroundColorString bkg =
             Nothing
 
 
-{-| A skybox!
+{-| A skybox background!
 -}
-backgroundSkybox : Background coordinates
-backgroundSkybox =
-    BackgroundSkybox
+backgroundSkybox : SkyboxTexture -> Background coordinates
+backgroundSkybox texture =
+    BackgroundSkybox texture
 
 
 
@@ -1361,6 +1361,98 @@ storeStencilValue lightIndex =
         }
 
 
+
+--TODO need to improve this part!
+
+
+toTransformationMatrices :
+    { camera : Camera3d Meters coordinates
+    , clipDepth : Length
+    , aspectRatio : Float
+    , entities : List (Entity coordinates)
+    }
+    ->
+        Maybe
+            { projectionMatrix : Mat4
+            , viewMatrix : Mat4
+            , viewProjection : Mat4
+            }
+toTransformationMatrices arguments =
+    let
+        viewpoint =
+            Camera3d.viewpoint arguments.camera
+
+        (Types.Entity rootNode) =
+            Entity.group arguments.entities
+
+        viewFrame =
+            Frame3d.unsafe
+                { originPoint = Viewpoint3d.eyePoint viewpoint
+                , xDirection = Viewpoint3d.xDirection viewpoint
+                , yDirection = Viewpoint3d.yDirection viewpoint
+                , zDirection = Direction3d.reverse (Viewpoint3d.viewDirection viewpoint)
+                }
+    in
+    getViewBounds viewFrame 1 Nothing [ rootNode ]
+        |> Maybe.map
+            (\viewBounds ->
+                let
+                    ( xDimension, yDimension, zDimension ) =
+                        BoundingBox3d.dimensions viewBounds
+
+                    -- Used as the offset value when constructing shadows,
+                    -- to ensure they extend all the way out of the scene
+                    sceneDiameter =
+                        Vector3d.length (Vector3d.xyz xDimension yDimension zDimension)
+
+                    nearClipDepth =
+                        -- If nearest object is further away than the given
+                        -- clip depth, then use that (larger) depth instead
+                        -- to get better depth buffer accuracy for free
+                        Quantity.max
+                            (Quantity.abs arguments.clipDepth)
+                            (Quantity.negate (BoundingBox3d.maxZ viewBounds))
+                            -- Accommodate for a bit of roundoff error,
+                            -- ensure things right at the near plane
+                            -- don't get clipped
+                            |> Quantity.multiplyBy 0.99
+
+                    farClipDepth =
+                        -- Start at the maximum distance anything is from
+                        -- the camera
+                        Quantity.negate (BoundingBox3d.minZ viewBounds)
+                            -- Ensure shadows don't get clipped (shadows
+                            -- extend past actual scene geometry)
+                            |> Quantity.plus sceneDiameter
+                            -- Accommodate for a bit of roundoff error,
+                            -- ensure things right at the far plane
+                            -- don't get clipped
+                            |> Quantity.multiplyBy 1.01
+
+                    projectionMatrix =
+                        WebGL.projectionMatrix arguments.camera
+                            { aspectRatio = arguments.aspectRatio
+                            , nearClipDepth = nearClipDepth
+                            , farClipDepth = farClipDepth
+                            }
+
+                    viewMatrix =
+                        WebGL.viewMatrix viewpoint
+
+                    viewProjectionMatrix =
+                        WebGL.viewProjectionMatrix arguments.camera
+                            { aspectRatio = arguments.aspectRatio
+                            , nearClipDepth = nearClipDepth
+                            , farClipDepth = farClipDepth
+                            }
+                in
+                { projectionMatrix = projectionMatrix
+                , viewMatrix = viewMatrix
+                , viewProjection = viewProjectionMatrix
+                }
+            )
+
+
 {-| This function lets you convert a list of `elm-3d-scene` entities into a list
 of plain `elm-explorations/webgl` entities, so that you can combine objects
 rendered with `elm-3d-scene` with custom objects you render yourself.
@@ -1749,6 +1841,18 @@ composite arguments scenes =
                             , entities = scene.entities
                             }
                     )
+
+        matrices =
+            toTransformationMatrices
+                { camera = arguments.camera
+                , clipDepth = arguments.clipDepth
+                , aspectRatio = aspectRatio
+                , entities =
+                    scenes
+                        |> List.head
+                        |> Maybe.map .entities
+                        |> Maybe.withDefault []
+                }
     in
     Html.Keyed.node "div" [ Html.Attributes.style "padding" "0px", widthCss, heightCss ] <|
         [ ( key
@@ -1763,17 +1867,22 @@ composite arguments scenes =
                     |> Maybe.map (Html.Attributes.style "background-color")
                     |> Maybe.withDefault attrNone
                 ]
-                (case arguments.background of
-                    BackgroundSkybox ->
-                        Skybox.quad :: webGLEntities
+                (List.concat
+                    [ case ( arguments.background, matrices ) of
+                        ( BackgroundSkybox texture, Just { viewProjection } ) ->
+                            List.singleton (Skybox.quad arguments.camera viewProjection texture)
 
-                    _ ->
-                        webGLEntities
+                        _ ->
+                            []
+                    , webGLEntities
+                    ]
                 )
           )
         ]
 
 
+{-| TODO move this somewhere nicer
+-}
 attrNone : Html.Attribute msg
 attrNone =
     Html.Attributes.property "" Encode.null

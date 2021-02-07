@@ -21,6 +21,12 @@ import Scene3d.Material as Material
 import Task
 import Viewpoint3d
 import Length
+import WebGL.Texture as Texture
+import Scene3d.Skybox as Skybox exposing
+    ( SkyboxTexture
+    , SkyboxTextureResult
+    , loadEquirectTextureCmd
+    )
 
 
 type alias Model =
@@ -29,6 +35,7 @@ type alias Model =
     , orbiting : Bool
     , azimuth : Angle
     , elevation : Angle
+    , skyboxTexture : Maybe SkyboxTexture
     }
 
 
@@ -37,6 +44,7 @@ type Msg
     | MouseDown
     | Resize (Quantity Int Pixels) (Quantity Int Pixels)
     | MouseMove (Quantity Float Pixels) (Quantity Float Pixels)
+    | SkyboxLoaded SkyboxTextureResult
 
 
 type WorldCoordinates
@@ -59,15 +67,23 @@ init _ =
       , height = Quantity.zero
       , orbiting = False
       , azimuth = Angle.degrees 135
-      , elevation = Angle.degrees 30
+      , elevation = Angle.degrees 5
+      , skyboxTexture = Nothing
       }
-    , Task.perform
-        (\{ viewport } ->
-            Resize
-                (Pixels.int (round viewport.width))
-                (Pixels.int (round viewport.height))
-        )
-        Browser.Dom.getViewport
+    , Cmd.batch
+        [ Task.perform
+            (\{ viewport } ->
+                Resize
+                    (Pixels.int (round viewport.width))
+                    (Pixels.int (round viewport.height))
+            )
+            Browser.Dom.getViewport
+        
+        -- Load equirectangular texture
+        , Skybox.loadEquirectTextureCmd
+            SkyboxLoaded
+            "../assets/equirect-skybox-aurora.jpg"
+        ]
     )
 
 
@@ -133,6 +149,16 @@ update msg model =
 
             else
                 ( model, Cmd.none )
+        
+
+        SkyboxLoaded (Ok texture) ->
+            ( { model | skyboxTexture = Just texture }, Cmd.none )
+        
+        SkyboxLoaded (Err err) ->
+            let
+                _ = Debug.log "skybox err" err
+            in
+            ( model, Cmd.none )
 
 
 view : Model -> Browser.Document Msg
@@ -159,8 +185,10 @@ view model =
             , dimensions = ( model.width, model.height )
             , camera = camera
             , clipDepth = Length.centimeters 10
-            , background = Scene3d.backgroundSkybox
-            --, background = Scene3d.backgroundColor Color.lightBlue
+            , background = 
+                model.skyboxTexture
+                    |> Maybe.map Scene3d.backgroundSkybox
+                    |> Maybe.withDefault (Scene3d.backgroundColor Color.lightBlue)
             , entities =
                 [ Scene3d.block
                     ( Material.matte Color.lightBrown)
